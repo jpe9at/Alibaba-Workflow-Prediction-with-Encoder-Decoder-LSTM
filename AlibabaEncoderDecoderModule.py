@@ -30,11 +30,12 @@ class AlibabaEncoderDecoder(nn.Module):
         self.learning_rate = learning_rate
         self.l1_rate = l1
         self.l2_rate = l2
+        if clip_val != 0: 
+            self.clip_gradients(clip_val)
 
         self.optimizer = self.get_optimizer(optimizer, self.learning_rate, self.l2_rate)
         self.loss = self.get_loss(loss_function)
         self.metric = self.get_metric()
-        self.clip_val = clip_val
         self.scheduler = self.get_scheduler(scheduler, self.optimizer)
         
         self.activation = nn.PReLU()  
