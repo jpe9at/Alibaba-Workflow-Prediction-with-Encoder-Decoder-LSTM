@@ -3,23 +3,27 @@ import torch
 import torch.nn.init as init
 import torch.nn.functional as F
 
-class EncoderDecoderMaster(nn.Module):
+class AlibabaEncoderDecoder(nn.Module):
     """The base class of models."""
     def __init__(self, input_size, hidden_size, concat_size, hidden_size_2, output_size, num_layers = 1, optimizer = 'SGD', learning_rate = 0.001, loss_function = 'MSE', l1 = 0.0, l2 = 0.0, clip_val=0, scheduler = None):
-        super(EncoderDecoderMaster, self).__init__()
+        super(AlibabaEncoderDecoder, self).__init__()
         self.output_size = output_size
         self.hidden_size = hidden_size
         self.num_layers = num_layers
+
+        # Encoder
         self.encoder = nn.LSTM(input_size, hidden_size, self.num_layers , batch_first=True, bidirectional=False)
         self.initialize_weights(self.encoder, 'Xavier', 1)
         
-        self.decoder = nn.LSTM(input_size, hidden_size, num_layers, batch_first=True)
+        # Decoder
+        self.decoder = nn.LSTM(hidden_size, hidden_size, num_layers, batch_first=True)
         self.initialize_weights(self.decoder, 'Xavier', 1)
 
-        #Additional vector to concatenate
+        # Additional Vector to Concatenate
         self.fc_concat = nn.Linear(concat_size, hidden_size_2)
         self.initialize_weights(self.fc_concat, 'He', 0)
 
+        # Final Layer
         self.fc = nn.Linear(hidden_size + hidden_size_2, output_size) 
         self.initialize_weights(self.fc, 'Normal', 0)
         
@@ -38,27 +42,27 @@ class EncoderDecoderMaster(nn.Module):
 
     def forward(self, x, additional):
         
+        # Encoder
         h0 = torch.zeros(self.num_layers, x.size(0), self.hidden_size)
         c0 = torch.zeros(self.num_layers, x.size(0), self.hidden_size)
 
         encoder_output, (encoder_hidden, encoder_cell) = self.encoder(x, (h0, c0))
 
         # Decoder
-        decoder_hidden, decoder_cell = encoder_hidden, encoder_cell
-        hidden_seq = []
+        decoder_input, decoder_hidden, decoder_cell = encoder_output, encoder_hidden, encoder_cell
 
-        for t in range(x.size(1)):  # Iterate over time steps
-            decoder_output, (decoder_hidden, decoder_cell) = self.decoder(x[:,t,:].unsqueeze(1), (decoder_hidden, decoder_cell))
-            hidden_seq.append(decoder_hidden)
-        #print(decoder_hidden.shape)
-        #print(decoder_hidden[-1].shape)
-        #print(hidden_seq[-1].shape)
-        final_hidden_state = decoder_hidden[-1] 
+        '''The decoder iterates over the length of the sequence trying to 
+            reconstuct it from the encoder output and hidden states'''
+        for t in range(x.size(1)):  
+            decoder_output, (decoder_hidden, decoder_cell) = self.decoder(decoder_input, (decoder_hidden, decoder_cell))
+            decoder_input = decoder_output
+
+        final_hidden_state = decoder_hidden[-1]
 
         # Apply linear transformation to additional vector
         additional_transformed = self.activation(self.fc_concat(additional))
-        
-        # Concatenate LSTM output and additional vector
+
+        # Concatenate Decoder output and additional vector
         concatenated = torch.cat((final_hidden_state, additional_transformed), dim=1)
         
         # Fully connected layer
@@ -66,27 +70,34 @@ class EncoderDecoderMaster(nn.Module):
 
         return output
 
-
-    def get_optimizer(self, optimizer, learning_rate, l2):
-        Optimizers = {'Adam':optim.Adam(self.parameters(), lr=learning_rate, weight_decay = l2), 'SGD': optim.SGD(self.parameters(), lr=learning_rate, momentum=0.09, weight_decay = l2)}
-        return Optimizers[optimizer]
+    def get_optimizer(self, optimizer, learning_rate, l2_rate):
+        optimizers = {
+            'SGD': optim.SGD(self.parameters(), lr=learning_rate, weight_decay=l2_rate),
+            'Adam': optim.Adam(self.parameters(), lr=learning_rate, weight_decay=l2_rate)
+        }
+        return optimizers[optimizer]
 
     def l1_regularization(self, loss):
         l1_reg = sum(p.abs().sum() * self.l1_rate for p in self.parameters())
         loss += l1_reg
         return loss
 
-    def get_loss(self,loss_function):
-        Loss_Functions = {'CEL': nn.CrossEntropyLoss(), 'MSE': nn.MSELoss(), 'MAE' : lambda y, y_hat: torch.mean(torch.abs(y - y_hat)), 'Huber' : nn.HuberLoss()}
-        return Loss_Functions[loss_function]
+    def get_loss(self, loss_function):
+        loss_functions = {
+            'CEL': nn.CrossEntropyLoss(),
+            'MSE': nn.MSELoss(),
+            'MAE': nn.L1Loss(),
+            'Huber': nn.HuberLoss()
+        }
+        return loss_functions[loss_function]
 
     def get_metric(self):
         return torch.nn.L1Loss()
-    
+
     def get_scheduler(self, scheduler, optimizer):
         if scheduler is None:
             return None
-        schedulers = {'OnPlateau': optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.15, patience=4, threshold=0.001)}
+        schedulers = {'OnPlateau': optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.15, patience=4, threshold=0.01)}
         return schedulers[scheduler]
 
     def xavier_init(self,tensor):

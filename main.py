@@ -55,15 +55,6 @@ workload_data = pd.DataFrame(standardizedm_data, columns=workload_dataframe.colu
 
 
 
-'''
-#This does the Min Max Saling
-#substract by min value, divide by max value minus in value.
-min_max_scaler = MinMaxScaler()
-workload_data = pd.DataFrame(min_max_scaler.fit_transform(workload_dataframe), columns=workload_dataframe.columns)
-
-#to reverse the compression
-#original_data_minmax = min_max_scaler.inverse_transform(df_normalized)
-'''
 
 workload_data = workload_data * 10
 
@@ -77,9 +68,9 @@ output_size = 3
 
 if hyperparameter_optimization == True:
     print('Hyperparameter Optimization Loop')
-    best_params, best_accuracy = Trainer.hyperparameter_optimization(workload_data, input_size, 6)
+    best_params, best_accuracy = Trainer.hyperparameter_optimization(workload_data, input_size, 3)
     edm_model= EncoderDecoderMaster(input_size, best_params['hidden_size'], 3, best_params['hidden_size_2'], output_size, num_layers = best_params['num_layers'],optimizer = best_params['optimizer'], learning_rate = best_params['learning_rate'], loss_function = best_params['loss'], clip_val = best_params['gradient_clip'], scheduler = best_params['scheduler'])
-    trainer = Trainer(40, best_params['batch_size'], early_stopping_patience = 10, window_size = best_params['window_size'])
+    trainer = Trainer(60, best_params['batch_size'], early_stopping_patience = 10, window_size = best_params['window_size'])
     trainer.fit(edm_model,workload_data)
 
     torch.save({
@@ -122,14 +113,14 @@ else:
     hidden_size_2 = 32
     num_layers = 1
     optimizer = 'Adam'
-    learning_rate = 0.0092
+    learning_rate = 0.000124
     loss_function = 'MSE'
     scheduler = 'OnPlateau'
     clip_val = 0.0
     l1 = 0.0
     l2 = 0.0
     edm_model= EncoderDecoderMaster(input_size, hidden_size, 3, hidden_size_2, output_size, num_layers, optimizer, learning_rate, loss_function, l1, l2, clip_val , scheduler )
-    trainer = Trainer(50, 32, early_stopping_patience = 10, window_size = 10)
+    trainer = Trainer(60, 32, early_stopping_patience = 10, window_size = 10)
     trainer.fit(edm_model,workload_data)
     torch.save({
         'state_dict': edm_model.state_dict(),
@@ -178,31 +169,15 @@ if use_savedm_model == False:
 #Test the model
 ##############################
 
-def interpolate_prediction(dataset):
-    interpolated_predictions = torch.zeros(1,output_size)
-    for x, _ in test_data:
-        # Difference between last two known values
-        delta_x = 1
-        delta_y = x[:,-1,0:3]- x[:,-2,0:3]
-        # Slope of the linear relationship
-        slope = delta_y / delta_x
-        next_value = x[:,-1,0:3] + slope  
-        interpolated_predictions = torch.cat((interpolated_predictions,next_value), dim=0)
-
-    yy_0 = interpolated_predictions[:,0]
-    yy_1 = interpolated_predictions[:,1]
-    yy_2 = interpolated_predictions[:,2]
-    return yy_0, yy_1, yy_2
 
 def choose_same_value_again(dataset):
     baseline_predictions = torch.zeros(1,output_size)
     for x, _ in test_data:
         next_value = x[:,-1,0:3]   
         baseline_predictions = torch.cat((baseline_predictions,next_value), dim=0)
+    return baseline_predictions
 
-    y_0 = baseline_predictions[:,0]
-    y_1 = baseline_predictions[:,1]
-    y_2 = baseline_predictions[:,2]
+
     return y_0, y_1, y_2
 
 
@@ -219,80 +194,35 @@ y_hat_2 = y_hat[:,2]
 
 test_data = trainer.test_dataloader
 
-yy_0, yy_1, yy_2 = interpolate_prediction(test_data)
-m_0, m_1, m_2 = choose_same_value_again(test_data)
+baseline_predictions = choose_same_value_again(test_data)
+m_0 = baseline_predictions[:,0]
+m_1 = baseline_predictions[:,1]
+m_2 = baseline_predictions[:,2]
+
 
 x_values = range(len(y_0))
 
 plt.figure()
-plt.plot(x_values, y_0, color='blue', label='test_data' , linestyle='-')
-plt.plot(x_values, y_hat_0, color='green', label='prediction' , linestyle='-')
-plt.plot(x_values, yy_0[:-1], color='red', label='lin_interpolation' , linestyle='-')
-plt.plot(x_values, m_0[:-1], color='orange', label='same_val_again' , linestyle='-')
+plt.plot(x_values, y_0, color='blue', label='Test Data' , linestyle='-')
+plt.plot(x_values, y_hat_0, color='green', label='Prediction' , linestyle='-')
+#plt.plot(x_values, y_0[:-1], color='orange', label='Same value again' , linestyle='-')
 plt.title("Avg CPU")
 plt.legend()
 
 plt.figure()
-plt.plot(x_values, y_1, color='red', label='test_data' , linestyle='-')
-plt.plot(x_values, y_hat_1, color='green', label='prediction' , linestyle='-')
-plt.plot(x_values, yy_1[:-1], color='orange', label='lin_interpolation' , linestyle='-')
-plt.plot(x_values, m_1[:-1], color='yellow', label='same_val_again' , linestyle='-')
+plt.plot(x_values, y_1, color='red', label='Test Data' , linestyle='-')
+plt.plot(x_values, y_hat_1, color='green', label='Prediction' , linestyle='-')
+#plt.plot(x_values, y_1[:-1], color='yellow', label='Same value again' , linestyle='-')
 plt.title("Avg GPU")
 plt.legend()
 
 plt.figure()
-plt.plot(x_values, y_2, color='cyan', label='test_data' , linestyle='-')
-plt.plot(x_values, y_hat_2, color='green', label='prediction' , linestyle='-')
-plt.plot(x_values, yy_2[:-1], color='red', label='lin_interpolation' , linestyle='-')
-plt.plot(x_values, m_2[:-1], color='orange', label='same_val_again' , linestyle='-')
+plt.plot(x_values, y_2, color='cyan', label='Test Data' , linestyle='-')
+plt.plot(x_values, y_hat_2, color='green', label='Prediction' , linestyle='-')
+#plt.plot(x_values, y_2[:-1], color='orange', label='Same value again' , linestyle='-')
 plt.title("Avg Memory")
 plt.legend()
 
 plt.show()
 
-'''
-##################################
-#do some iterated predicitons
-##################################
 
-
-iteratedm_data = iter(test_data)
-first_batch , _ = next(iteratedm_data)
-start = first_batch[0,:,:].unsqueeze(0)
-edm_predictions = start[0,:,0:3].squeeze(0)
-y = torch.cat((edm_predictions, y), dim=0).detach().numpy()
-y_0 = y[:,0]
-y_1 = y[:,1]
-y_2 = y[:,2]
-
-edm_model.eval()
-for i in range(test_data.dataset.len):
-    next_prediction = edm_model(start)
-    edm_predictions = torch.cat((edm_predictions,next_prediction),dim=0)
-    start = torch.cat((start,next_prediction.unsqueeze(0)),dim=1)[:,1:,:]
-
-p_0 = edm_predictions[:,0].detach().numpy()
-p_1 = edm_predictions[:,1].detach().numpy()
-p_2 = edm_predictions[:,2].detach().numpy()
-
-x_values = range(len(y_0))
-
-plt.figure()
-plt.plot(x_values, y_0, color='blue', label='test_data' , linestyle='-')
-plt.plot(x_values, p_0, color='green', label='prediction' , linestyle='-')
-plt.title("Iterated Predictions CPU")
-plt.legend()
-
-plt.figure()
-plt.plot(x_values, y_1, color='red', label='test_data' , linestyle='-')
-plt.plot(x_values, p_1, color='green', label='prediction' , linestyle='-')
-plt.title("Iterated Predictions GPU")
-plt.legend()
-
-plt.figure()
-plt.plot(x_values, y_2, color='cyan', label='test_data' , linestyle='-')
-plt.plot(x_values, p_2, color='green', label='prediction' , linestyle='-')
-plt.title("Iterated Predictions Memory")
-plt.legend()
-plt.show()
-'''

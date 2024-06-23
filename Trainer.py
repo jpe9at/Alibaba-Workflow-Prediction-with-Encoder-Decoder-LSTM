@@ -3,11 +3,10 @@ import torch.nn as nn
 import time
 from CustomDataClass import dataset_for_time_series, DataModule
 import optuna
-from Module import EncoderDecoderMaster
+from AlibabaEncoderDecoderModule import AlibabaEncoderDecoder
 
 
 class Trainer: 
-    """The base class for training models with data."""
     def __init__(self, max_epochs = 50, batch_size = 8, early_stopping_patience=6, min_delta = 0.09, num_gpus=0, window_size = 10):
         self.max_epochs = max_epochs
         self.batch_size = batch_size
@@ -20,16 +19,10 @@ class Trainer:
 
     def prepare_training_data(self, workload_data):
         
-        #create the training/val/testsplit
+        '''create the training/val/testsplit'''
         split_index = int(len(workload_data) * 0.8)  # Split at 80% of the data
         split_index2 = int(split_index + ((len(workload_data) - split_index)/2))
 
-        #do not use the full dataset if the sizes are too big.
-        #h = int(split_index * 0.78)
-        #h2 = split_index + int(split_index2 * 0.7)
-
-
-        #Split the time series data into training and testing sets
         print('Prepare the labels')
         train_data_X, train_data_y = dataset_for_time_series(workload_data[:split_index], self.window_size)
         val_data_X, val_data_y = dataset_for_time_series(workload_data[split_index:split_index2], self.window_size)
@@ -49,7 +42,7 @@ class Trainer:
         self.test_dataloader = data_test.get_dataloader(self.batch_size)
     
     def prepare_test_data(self, data_test):
-        #if test data is added after the training 
+        '''if test data is added after the training''' 
         test_data_X, test_data_y = dataset_for_time_series(data_test, self.window_size)
         data_test = DataModule(test_data_X, val_data_y)
         self.test_dataloader = data_test.get_dataloader(batch_size)
@@ -94,7 +87,7 @@ class Trainer:
     def fit_epoch(self):
         train_loss = 0.0
         total_batches = len(self.train_dataloader)
-        #torch.autograd.set_detect_anomaly(True)
+        #torch.autograd.set_detect_anomaly(True) This one makes it such that the training does not stop when we hit NaN values.
         for idx, (x_batch, y_batch) in enumerate(self.train_dataloader):
             additional = y_batch[:,-1,3:]
             output = self.model(x_batch, additional)
@@ -154,21 +147,11 @@ class Trainer:
                 y_hat = model(X, additional)  # Choose the class with highest probability
                 y_total = torch.cat((y_total,y[:,-1,0:3]), dim=0)
                 y_hat_total = torch.cat((y_hat_total,y_hat), dim=0)
-                loss = model.loss(y_hat, y[:,-1,0:3])
+                loss = model.metric(y_hat, y[:,-1,0:3])
                 self.test_loss += loss * X.size(0)
         self.test_loss /= len(self.test_dataloader.dataset)
 
         return y_hat_total[1:], y_total[1:]
-
-    def calculate_accuracy(self,predictions, labels):
-        # Get the predicted classes by selecting the index with the highest probabilityc
-        _, predicted_classes = torch.max(predictions, 0)
-        # Compare predictions with ground truth
-        correct_predictions = torch.eq(predicted_classes, labels).sum().item()
-        # Calculate accuracy
-        accuracy = correct_predictions / labels.size(0)
-        return accuracy
-
     
     @classmethod
     def Optuna_objective(cls, trial, workload_data, input_size, output_size):
@@ -176,6 +159,7 @@ class Trainer:
         learning_r = trial.suggest_float("learning_rate", 1e-6, 1e-2)
         batch_size = trial.suggest_categorical("batch_size", [32,128,256])
         hidden_size = trial.suggest_categorical('hidden_size',[32,64,128])
+        hidden_size_2 = trial.suggest_categorical('hidden_size_2',[8,32,64])
         l2_rate = trial.suggest_categorical('l2_rate', [0.0,0.0001,0.005])
         loss_function = trial.suggest_categorical('loss', ['MSE','Huber'])
         window_size = trial.suggest_categorical('window_size', [10,15,20])
@@ -183,7 +167,7 @@ class Trainer:
         scheduler = trial.suggest_categorical('scheduler', [None, 'OnPlateau'])
         num_layers = trial.suggest_categorical('num_layers', [1,2])
 
-        model = EncoderDecoder(input_size, hidden_size, output_size, num_layers, learning_rate = learning_r, loss_function = loss_function, clip_val = gradient_clip, scheduler = scheduler)
+        model = AlibabaEncoderDecoder(input_size, hidden_size, 3, hidden_size_2, output_size, num_layers, learning_rate = learning_r, loss_function = loss_function, clip_val = gradient_clip, scheduler = scheduler)
         trainer = cls(30,  batch_size, window_size = window_size)
         trainer.fit(model, workload_data)
 
@@ -193,7 +177,7 @@ class Trainer:
     def hyperparameter_optimization(cls, workload_data, input_size,output_size):
         study = optuna.create_study(direction='minimize')
         objective_func = lambda trial: cls.Optuna_objective(trial, workload_data, input_size, output_size)
-        study.optimize(objective_func, n_trials=30)
+        study.optimize(objective_func, n_trials=15)
 
         best_trial = study.best_trial
         best_params = best_trial.params
